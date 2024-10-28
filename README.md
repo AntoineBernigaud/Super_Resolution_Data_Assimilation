@@ -1,4 +1,6 @@
 # This is a demo repository for the NECCTON project 
+
+[![DOI](https://zenodo.org/badge/879770236.svg)](https://doi.org/10.5281/zenodo.14002682)
 showing a template for what a repo should contain and can look like
 
 # Neccton_Super_Resolution
