@@ -1,18 +1,17 @@
-# This is a demo repository for the NECCTON project 
+# This is a demo repository for the Super Resolution Data Assimilation 
 
 [![DOI](https://zenodo.org/badge/879770236.svg)](https://doi.org/10.5281/zenodo.14002682)
-showing a template for what a repo should contain and can look like
 
-# Neccton_Super_Resolution
+# Super Resolution Data Assimilation 
 
-Super Resolution for the NECCTON project.
+Super Resolution for the EDITO project.
 A Neural Network allows to go from a low resolution field to a high resolution field to do data assimilation in the HR space, to then go back
 in the LR dimension to run a LR model.
 To do so, the Neural Network computes the residuals it needs to add to a bilinear upsampling of the LR field to get the true HR field.
 
 # Usage
 
-To run the super resolution algorithm and compare the result to a bsaline, open Test_ResUnet.ipynb and run all the cells [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Neccton_Super_Resolution/blob/main/Test_ResUnet.ipynb)
+To run the super resolution algorithm and compare the result to a baseline, open Test_ResUnet.ipynb and run all the cells [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Neccton_Super_Resolution/blob/main/Test_ResUnet.ipynb)
 
 ## Data Source
 
@@ -28,7 +27,7 @@ They are available through FTP (details provided in the code). For now, only the
 
 ## Baseline
 
-The superresolution with the residual U-Net is compared to bilinear interpolation.
+The super resolution with the residual U-Net is compared to bilinear interpolation.
 
 ## Metrics
 
