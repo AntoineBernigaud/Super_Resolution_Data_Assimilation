@@ -11,7 +11,7 @@ To do so, the Neural Network computes the residuals it needs to add to a bilinea
 
 # Usage
 
-To run the super resolution algorithm and compare the result to a baseline, open Test_ResUnet.ipynb and run all the cells [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AntoineBernigaud/Neccton_Super_Resolution/blob/main/Test_ResUnet.ipynb)
+To run the super resolution algorithm and compare the result to a baseline, open the Super Resolution Data Assimilation tutorial on the EDITO platform (https://dive.edito.eu/training?search=SRDA&path=%5B%5D) and run all the cells in Test_ResUnet.ipynb.
 
 ## Data Source
 
