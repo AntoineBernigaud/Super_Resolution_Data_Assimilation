@@ -1,7 +1,6 @@
 data/HR/*
 data/LR_upsampled/*
+!data/HR/.gitkeep
+!data/LR_upsampled/.gitkeep
 weights/*
-!data/HR/
-!data/LR_upsampled/
-!weights/
-
+!weights/.gitkeep
