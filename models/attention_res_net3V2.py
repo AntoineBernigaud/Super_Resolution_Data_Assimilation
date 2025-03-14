@@ -2,6 +2,23 @@ import tensorflow as tf
 import numpy as np
 tf.keras.utils.set_random_seed(1234)
 
+class Mish(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super(Mish, self).__init__(**kwargs)
+
+    def call(self, inputs):
+        return inputs * tf.tanh(tf.nn.softplus(inputs))
+    
+def get_activation(name):
+    if name == "mish":
+        return Mish()
+    elif name == "relu":
+        return tf.keras.layers.ReLU()
+    elif name == "gelu":
+        return tf.keras.layers.Activation(tf.nn.gelu)
+    else:
+        raise ValueError(f"Activation '{name}' is not supported.")
+
 class Att_Res_UNet():
     def __init__(self, list_predictors, list_targets, dim, cropped_dim, batch_size, n_filters, activation, kernel_initializer, batch_norm, pooling_type, dropout):
         self.list_predictors = list_predictors
@@ -9,87 +26,26 @@ class Att_Res_UNet():
         self.patch_dim = tuple([d for d in cropped_dim])
         self.batch_size = batch_size
         self.n_filters = n_filters
-        self.activation = activation
+        self.activation = get_activation(activation)
         self.kernel_initializer = kernel_initializer
         self.batch_norm = batch_norm
         self.pooling_type = pooling_type
         self.dropout = dropout
-        self.n_predictors = len(list_predictors)
-        self.n_targets = len(list_targets)
+        if list_predictors[0] == 'dp_constrained':
+            self.n_predictors = 51
+            self.n_targets = 50
+        else:
+            self.n_predictors = len(list_predictors)
+            self.n_targets = len(list_targets)
         self.weight_regularizer = None ## A implementer eventuellement ...
         self.repeat_elem_counter = -1
-    #
-#        conv = self.partial_conv(n_filters, kernel_size = (3,3), padding = padding, kernel_initializer = self.kernel_initializer)(x)
-    def partial_conv(self, x, n_filters, kernel_size, use_bias=True, padding="same"):
-        if padding.lower() == 'SAME'.lower():
-            slide_window = kernel_size * kernel_size
 
-            update_mask = tf.keras.layers.Conv2D(filters=1,
-                                           kernel_size=kernel_size, kernel_initializer=tf.keras.initializers.Constant(1.0),
-                                           padding=padding, use_bias=False, trainable=False)(self.mask)
-
-            mask_ratio = slide_window / (update_mask + 1e-8)
-            update_mask = tf.clip_by_value(update_mask, 0.0, 1.0)
-            mask_ratio = mask_ratio * update_mask
-
-            x = tf.keras.layers.Conv2D(filters=n_filters,
-                                 kernel_size=kernel_size, kernel_initializer=self.kernel_initializer,
-                                 kernel_regularizer=self.weight_regularizer,
-                                 padding=padding, use_bias=False)(x)
-            x = x * mask_ratio
-            
-            if use_bias:
-                bias = tf.Variable(tf.zeros(shape=(1, 1, 1, n_filters), dtype=tf.float16), trainable=True)
-                x = tf.keras.layers.Add()([x, bias])
-                #x = x * update_mask
-        else:
-            x = tf.keras.layers.Conv2D(filters=n_filters,
-                                 kernel_size=kernel_size, kernel_initializer=self.kernel_initializer,
-                                 kernel_regularizer=self.weight_regularizer,
-                                 padding=padding, use_bias=use_bias)(x)
-
-        return (x)
-    #
     def repeat_elem(self, tensor, rep, name=None):
         self.repeat_elem_counter += 1
         # Construct the unique name
         unique_name = f'{name}_{self.repeat_elem_counter}'
         return tf.keras.layers.Lambda(lambda x, repnum: tf.keras.backend.repeat_elements(x, repnum, axis = 3), arguments = {'repnum': rep}, name=unique_name)(tensor)
-    #
-    def gating_signal(self, x, n_filters, batch_norm = False):
-        x = tf.keras.layers.Conv2D(n_filters, (1,1), padding = "same")(x)
-        if batch_norm == True:
-            x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.Activation("relu")(x)
-        return(x)
-    #
-    def attention_block(self, x, g, inter_shape):
-        shape_x = tf.keras.backend.int_shape(x)
-        shape_g = tf.keras.backend.int_shape(g)
-        #
-        theta_x = tf.keras.layers.Conv2D(inter_shape, kernel_size = (2,2), strides = (2,2), padding = "same")(x) 
-        shape_theta_x = tf.keras.backend.int_shape(theta_x)
-        #
-        phi_g = tf.keras.layers.Conv2D(inter_shape, kernel_size = (1,1), padding = "same")(g)
-        upsample_g = tf.keras.layers.Conv2DTranspose(inter_shape, (3,3), 
-                                                     strides = (shape_theta_x[1] // shape_g[1], shape_theta_x[2] // shape_g[2]),
-                                                     padding = "same")(phi_g)
-        
-        concat_xg = tf.keras.layers.add([upsample_g, theta_x])
-        act_xg = tf.keras.layers.Activation("relu")(concat_xg)
-        #
-        psi = tf.keras.layers.Conv2D(1, (1,1), padding = "same")(act_xg)
-        sigmoid_xg = tf.keras.layers.Activation("sigmoid")(psi)
-        shape_sigmoid = tf.keras.backend.int_shape(sigmoid_xg)
-        #
-        upsample_psi = tf.keras.layers.UpSampling2D(size = (shape_x[1] // shape_sigmoid[1], shape_x[2] // shape_sigmoid[2]))(sigmoid_xg)
-        upsample_psi = self.repeat_elem(upsample_psi, shape_x[3], name ='Attention_weights')
-        y = tf.keras.layers.multiply([upsample_psi, x])
-        #
-        result = tf.keras.layers.Conv2D(shape_x[3], (1,1), padding = "same")(y)
-        result_bn = tf.keras.layers.BatchNormalization()(result)
-        #
-        return(result_bn)
+
     #
     def residual_conv_block(self, x, n_filters, padding = "same"):
         conv = tf.keras.layers.Conv2D(n_filters, kernel_size = (3,3), padding = padding, kernel_initializer = self.kernel_initializer)(x)
@@ -98,25 +54,6 @@ class Att_Res_UNet():
         conv = tf.keras.layers.Activation(self.activation)(conv)
         #
         conv = tf.keras.layers.Conv2D(n_filters, kernel_size = (3,3), padding = padding, kernel_initializer = self.kernel_initializer)(conv)
-        if self.batch_norm == True:
-            conv = tf.keras.layers.BatchNormalization(axis = 3)(conv)
-        #
-        shortcut = tf.keras.layers.Conv2D(n_filters, kernel_size = (1,1), padding = padding)(x)
-        if self.batch_norm == True:
-            shortcut = tf.keras.layers.BatchNormalization(axis = 3)(shortcut)
-        #
-        res_path = tf.keras.layers.add([shortcut, conv])
-        res_path = tf.keras.layers.Activation(self.activation)(res_path)
-        #
-        return(res_path)
-    #
-    def partial_residual_conv_block(self, x, n_filters, padding = "same"):
-        conv = self.partial_conv(x, n_filters, kernel_size = 3, padding = padding)
-        if self.batch_norm == True:
-            conv = tf.keras.layers.BatchNormalization(axis = 3)(conv)
-        conv = tf.keras.layers.Activation(self.activation)(conv)
-        #
-        conv = self.partial_conv(conv, n_filters, kernel_size = 3, padding = padding)
         if self.batch_norm == True:
             conv = tf.keras.layers.BatchNormalization(axis = 3)(conv)
         #
@@ -158,16 +95,20 @@ class Att_Res_UNet():
         up_conv = self.residual_conv_block(up_att, n_filters)
         return(up_conv)
     #
-    def partial_upsample_block(self, x, conv_features, n_filters, kernel_size = (2,2), strides = 2, padding = "same"):
-        gating = self.gating_signal(x, n_filters)
-        att = self.attention_block(conv_features, gating, n_filters)
-        up_att = tf.keras.layers.UpSampling2D(size = (2, 2), data_format = "channels_last")(x)
-        up_att = tf.keras.layers.concatenate([up_att, att], axis = 3)
-        up_conv = self.partial_residual_conv_block(up_att, n_filters)
-        return(up_conv)
+    def upsample__transpose_block(self, x, conv_features, n_filters, kernel_size=(2, 2), strides=2, padding="same"):
+        # Use Conv2DTranspose instead of UpSampling2D
+        up_att = tf.keras.layers.Conv2DTranspose(filters=n_filters, kernel_size=kernel_size, strides=strides, padding=padding)(x)
+        # Concatenate with skip connection features
+        up_att = tf.keras.layers.concatenate([up_att, conv_features], axis=3)
+        
+        # Pass through the residual convolution block
+        up_conv = self.residual_conv_block(up_att, n_filters)
+    
+        return up_conv
     #
     def make_unet_model(self): 
         inputs = tf.keras.layers.Input(shape = (*self.patch_dim, self.n_predictors))
+        
         # Encoder (downsample)
         f1, p1 = self.downsample_block(inputs, self.n_filters[0])
         f2, p2 = self.downsample_block(p1, self.n_filters[1])
@@ -183,7 +124,23 @@ class Att_Res_UNet():
         u1 = self.upsample_block(u2, f2, self.n_filters[1])
         u0 = self.upsample_block(u1, f1, self.n_filters[0])
         # outputs
-        output = tf.keras.layers.Conv2D(self.n_targets, (1, 1), padding = "same", activation = "linear", dtype = tf.float32, name = "HR_output")(u0)
-        unet_model = tf.keras.Model(inputs, output, name = "Res-att-U-Net")
+        residuals = tf.keras.layers.Conv2D(self.n_targets, (1, 1), padding = "same", activation = "linear", dtype = tf.float32, name = "residuals_output")(u0)
+        if self.list_predictors[0] == 'dp_constrained':
+            hr_output = tf.keras.layers.Add(name="HR_output")([inputs[:,:,:,0:50], residuals])
+            positive_output = tf.keras.layers.ReLU()(hr_output)
+            
+            input_sum = tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=3, keepdims=True))(inputs[:,:,:,0:50])
+            output_sum = tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=3, keepdims=True))(positive_output)
+            
+            scale_factor = tf.keras.layers.Lambda(lambda x: x[0] / x[1])([input_sum, output_sum])
+            constrained_output = tf.keras.layers.Multiply()([positive_output, scale_factor])
+        
+            unet_model = tf.keras.Model(inputs, constrained_output, name = "Res-att-U-Net")
+        else:
+            #hr_output = tf.keras.layers.Add(name="HR_output")([inputs, residuals])
+            #unet_model = tf.keras.Model(inputs, hr_output, name = "Res-att-U-Net")
+            inputs_channels = inputs[:, :, :, 0:self.n_targets]
+            hr_output = tf.keras.layers.Add(name="HR_output")([inputs_channels, residuals])
+            unet_model = tf.keras.Model(inputs, hr_output, name = "Res-att-U-Net")
         #
         return(unet_model)
