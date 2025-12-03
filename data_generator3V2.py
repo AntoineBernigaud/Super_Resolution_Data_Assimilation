@@ -21,19 +21,18 @@ tf.keras.utils.set_random_seed(1234)
 
 
 class Data_generator(tf.keras.utils.Sequence):
-    def __init__(self, list_predictors, list_labels, list_dates, batch_size, path_data_HR, path_data_LR_upsampled, path_tp5mask, dim, cropped_dim, shuffle, res_normalization, dtime, mem = None, standard_forcings = None, standard_HR = None, standard_LR_upsampled = None, standard_bathy = None, path_forcings = None):
+    def __init__(self, list_predictors, list_labels, list_dates, standard_forcings, standard_res, standard_LR_upsampled, standard_bathy, batch_size, path_forcings, path_data_res, path_data_LR_upsampled, dim, cropped_dim, shuffle, res_normalization, dtime, mem):
         self.list_predictors = list_predictors
         self.list_labels = list_labels
         self.list_dates = list_dates
         self.standard_forcings = standard_forcings
-        self.standard_HR = standard_HR
+        self.standard_res = standard_res
         self.standard_LR_upsampled = standard_LR_upsampled
         self.standard_bathy = standard_bathy
         self.batch_size = batch_size
         self.path_forcings = path_forcings
-        self.path_data_HR = path_data_HR
+        self.path_data_res = path_data_res
         self.path_data_LR_upsampled = path_data_LR_upsampled
-        self.path_tp5mask = path_tp5mask
         self.HR_dim = dim
         self.LR_dim = tuple([d // 2 for d in dim])
         self.HR_cropped_dim = cropped_dim
@@ -44,18 +43,16 @@ class Data_generator(tf.keras.utils.Sequence):
         self.n_predictors = len(list_predictors)
         self.n_labels = len(list_labels)
         self.dtime = dtime
-        self.mem = mem if mem is not None else ""
+        self.mem = mem
         self.on_epoch_end()
         self.forcings = ["airtmp"]
-        self.ice_variables = ["uvel", "vvel", "scale_factor", "swvdr", "swvdf", "swidr", "swidf", "strocnxT", "strocnyT",
-    "stressp_1", "stressp_2", "stressp_3", "stressp_4", "stressm_1", "stressm_2", "stressm_3", "stressm_4",
+        self.ice_variables = ["uvel", "vvel", "scale_factor", "swvdr", "swvdf", "swidr", "swidf", "strocnxT", "strocnyT", "iceumask", "stressp_1", "stressp_2", "stressp_3", "stressp_4", "stressm_1", "stressm_2", "stressm_3", "stressm_4",
     "stress12_1", "stress12_2", "stress12_3", "stress12_4", "frz_onset", "fsnow"]
-        self.ocean_variables = ["u", "v", "dp", "temp", "saln", "ubavg", "vbavg", "pbavg", "pbot", "psikk", "thkk", "dpmixl"]
+        self.ocean_variables = ["u", "v", "dp", "temp", "saln", "ubavg", "vbavg", "pbavg", "pbot", "psikk", "thkk", "dpmixl", "ECO_fla", "ECO_dia", "ECO_ccl", "ECO_flac", "ECO_diac", "ECO_cclc", "ECO_sil", "ECO_oxy", "CO2_c"]
         self.ice_category_variables = [
     "aicen", "vicen", "vsnon", "Tsfcn", "iage", "FY", "alvl", "vlvl", "apnd", "hpnd", "ipnd", "dhs", "ffrac",
     "sice001", "qice001", "sice002", "qice002", "sice003", "qice003", "sice004", "qice004", "sice005", "qice005",
     "sice006", "qice006", "sice007", "qice007", "qsno001"]
-        self.BGC_variables = ["flac","diac","cclc"]
         self.filenames = [self.get_filename_from_ID(ID) for ID in self.list_IDs]
 
     def get_filenames(self):
@@ -141,9 +138,19 @@ class Data_generator(tf.keras.utils.Sequence):
         # Create the column of zeros to add to the field to have the right dimensions for the Unet
         zeropadHR = np.zeros((self.HR_cropped_dim[0] - self.HR_dim[0], self.HR_dim[1]))
         
-        tp5_mask = np.load(os.path.join(self.path_tp5mask,'tp5mask.npy'))
+        tp5_mask = np.load( os.path.join('/home/onyxia/work/Super_Resolution_Data_Assimilation/data','tp5mask.npy') )
         mask_indices_tp5 = np.where(tp5_mask==1)
-        
+       
+        # Case where we want to predict an ice variable using ocean variable as predictors: then we put the boolean ice_and_ocean to 1 to use only the surface layer for the ocean variable in the data generation
+        if (
+            (self.list_predictors[0].split('-')[0] in self.ice_variables or
+            self.list_predictors[0].split('-')[0] in self.ice_category_variables) and
+            any(p in self.ocean_variables for p in [v.split('-')[0] for v in self.list_predictors[1:]])
+        ):
+            ice_and_ocean = 1
+        else:
+            ice_and_ocean = 0
+ 
         # Generate data
         for i, ID in enumerate(list_IDs_batch):
             date_ID = self.list_dates[ID]
@@ -156,18 +163,17 @@ class Data_generator(tf.keras.utils.Sequence):
                 match = re.search(r'(\d+)$', parts[-1])
                 if match:
                     layer_number = int(match.group())
-                    cat_match = re.search(r'cat-(\d+)$', var)
-                    cat_number = int(cat_match.group(1))-1 if cat_match else None
                 else:
                     layer_number = None
-                    cat_number = None
-                #if layer != None :
-                #    layer_number = layer
                 if var_name in self.ocean_variables:
                     # take field.data (with fill values of 1e30), crop it, gets the indices of the mask
                     # normalize and finally put the mask at 0
-                    file_ID = os.path.join(self.path_data_LR_upsampled,f"restart.{date_ID}_00_0000" + self.mem + ".a")
+                    file_ID = os.path.join(self.path_data_LR_upsampled,f"restart.{date_ID}_00_0000" + ".a")
                     ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
+                    if ice_and_ocean: #take only the layer 1 for ocean predictor for the prediction of ice variable
+                        var_data = ab_file.read_field(var_name,1,1).data
+                    else:
+                        var_data = ab_file.read_field(var_name,layer_number,1).data
                     var_data = ab_file.read_field(var_name,layer_number,self.dtime).data
                     ab_file.close()
                     #var_data = self.normalize(var_name, layer_number, var_data,'LR')
@@ -185,98 +191,23 @@ class Data_generator(tf.keras.utils.Sequence):
                     X[i,:,:,v] = var_data
                 elif var_name in self.ice_variables:
                     # same as for the ocean variable, but already 0 instead of fill in values for the mask
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ID}_00_0000.nc"), 'r')
+                    date_ice = convert_date_format(date_ID)
+                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ice}-00000.nc"), 'r')
                     var_data =  nc_file.variables[var_name][:].data
                     nc_file.close()
-                    var_data = self.normalize(var_name, cat_number, var_data,'LR')
                     var_data[mask_indices_tp5] = 0 # Put the mask at 0
                     var_data = np.vstack((var_data, zeropadHR))
                     X[i,:,:,v] = var_data
                 elif var_name in self.ice_category_variables: # variable with ice category
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data =  nc_file.variables[var_name][cat_number,:].data
+                    date_ice = convert_date_format(date_ID)
+                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ice}-00000.nc"), 'r')
+                    var_data =  nc_file.variables[var_name][layer_number-1,:].data
                     nc_file.close()
-                    var_data = self.normalize(var_name, cat_number, var_data,'LR')
                     var_data[mask_indices_tp5] = 0 # Put the mask at 0
                     var_data = np.vstack((var_data, zeropadHR))
                     X[i,:,:,v] = var_data
                 elif var_name == 'tp5_mask': # We put a 0 on the land and a 1 on the ocean
                     X[i,:,:,v] = np.vstack((1-tp5_mask, zeropadHR)) 
-                elif var_name == 'iceumask': # We put a 0 on the ice and a 1 on the ocean
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data =  nc_file.variables[var_name][:].data
-                    nc_file.close()
-                    var_data = np.where(var_data > 0, 0, 1)
-                    var_data = np.vstack((1-var_data, 1+zeropadHR))
-                    X[i,:,:,v] = var_data                 
-                elif var_name == 'tp5_bathy':
-                    file_ID = os.path.join(self.path_data_res,"depth_TP5a0.06_05.a")
-                    ab_file = abfile.ABFileBathy(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
-                    var_data=ab_file.read_field("depth").data
-                    ab_file.close()
-                    var_data = self.normalize("depth", 1, var_data,'tp5_bathy')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = np.vstack((tp5_mask, zeropadHR))
-                elif var_name == 'tp5_lat':
-                    file_ID = os.path.join(self.path_data_res,"regional.grid.a")
-                    ab_file = abfile.ABFileGrid(file_ID,"r")
-                    var_data=ab_file.read_field("plat").data
-                    ab_file.close()
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = np.vstack((tp5_mask, zeropadHR))
-                elif var_name == 'ssh_upsampled':
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"ssh.{date_ID}_00_0000.nc"), 'r')
-                    var_data =  nc_file.variables['ssh'][:].data
-                    nc_file.close()
-                    var_data = self.normalize('ssh', 0, var_data,'ssh')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = var_data
-                elif var_name == 'aicenSumMask': # We put a 0 on the ice and a 1 on the ocean
-                    # NB : no normalization as it is a already a concentration between 0 and 1
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data = nc_file.variables['aicen'][0,:].data
-                    for cat_number in range(1,5):
-                        tmp = nc_file.variables['aicen'][cat_number,:].data
-                        var_data += tmp
-                    nc_file.close()
-                    var_data = np.where(var_data > 0, 0, 1)
-                    var_data = np.vstack((var_data, 1+zeropadHR))
-                    X[i,:,:,v] = var_data
-                elif var_name == 'aicenSumMask015': # We put a 0 on the ice and a 1 on the ocean
-                    # NB : no normalization as it is a already a concentration between 0 and 1
-                    nc_file = Dataset(os.path.join(self.path_data_LR_upsampled,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data = nc_file.variables['aicen'][0,:].data
-                    for cat_number in range(1,5):
-                        tmp = nc_file.variables['aicen'][cat_number,:].data
-                        var_data += tmp
-                    nc_file.close()
-                    var_data = np.where(var_data > 0.15, 0, 1)
-                    var_data = np.vstack((var_data, 1+zeropadHR))
-                    X[i,:,:,v] = var_data
-                elif var_name in self.BGC_variables:
-                    file_ID = os.path.join(self.path_data_LR_upsampled,f"restart.{date_ID}_00_0000.a")
-                    ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
-                    var_data = ab_file.read_field('ECO_'+var_name,layer_number,1).data
-                    ab_file.close()
-                    #var_data = self.normalize(var_name, layer_number, var_data,'LR')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = var_data
-                elif var_name == 'BGC':
-                    file_ID = os.path.join(self.path_data_LR_upsampled,f"restart.{date_ID}_00_0000.a")
-                    ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
-                    var_data1 = ab_file.read_field('ECO_flac',layer_number,1).data
-                    var_data2 = ab_file.read_field('ECO_diac',layer_number,1).data
-                    var_data3 = ab_file.read_field('ECO_cclc',layer_number,1).data
-                    var_data = var_data1 + var_data2 + var_data3
-                    ab_file.close()
-                    #var_data = self.normalize(var_name, layer_number, var_data,'LR')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = var_data
                 else:
                     raise Exception(f"Invalid predictor variable: {var_name}")
                     
@@ -288,13 +219,10 @@ class Data_generator(tf.keras.utils.Sequence):
                 match = re.search(r'(\d+)$', parts[-1])
                 if match:
                     layer_number = int(match.group())
-                    cat_match = re.search(r'cat-(\d+)$', var)
-                    cat_number = int(cat_match.group(1))-1 if cat_match else None
                 else:
                     layer_number = None
-                    cat_number = None
                 if var_name in self.ocean_variables:
-                    file_ID = os.path.join(self.path_data_HR,f"restart.{date_ID}_00_0000" + self.mem + ".a") ## LR_upsampled path for inference just because we don t need the label
+                    file_ID = os.path.join(self.path_data_res,f"restart.{date_ID}_00_0000" + ".a")
                     ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
                     var_data = ab_file.read_field(var_name,layer_number,self.dtime).data
                     ab_file.close()
@@ -305,60 +233,26 @@ class Data_generator(tf.keras.utils.Sequence):
                     var_data = np.vstack((var_data, zeropadHR))
                     y[i,:,:,v] = var_data
                 elif var_name in self.ice_variables:
-                    nc_file = Dataset(os.path.join(self.path_data_res,f"iced.{date_ID}_00_0000.nc"), 'r')
+                    date_ice = convert_date_format(date_ID)
+                    nc_file = Dataset(os.path.join(self.path_data_res,f"iced.{date_ice}-00000.nc"), 'r')
                     var_data =  nc_file.variables[var_name][:].data
                     nc_file.close()
-                    #var_data = var_data[0:self.HR_cropped_dim[0],0:self.HR_cropped_dim[1]]
-                    if  self.res_normalization == 1:
-                        var_data = self.normalize(var_name, cat_number, var_data,'res')
+                    #    var_data = self.normalize(var_name, cat_number, var_data,'res')
                     var_data[mask_indices_tp5] = 0 # Put the mask at 0
                     var_data = np.vstack((var_data, zeropadHR))
                     y[i,:,:,v] = var_data
                 elif var_name in self.ice_category_variables: # variable with ice category
-                    nc_file = Dataset(os.path.join(self.path_data_res,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data =  nc_file.variables[var_name][cat_number,:].data
+                    date_ice = convert_date_format(date_ID)
+                    nc_file = Dataset(os.path.join(self.path_data_res,f"iced.{date_ice}-00000.nc"), 'r')
+                    var_data =  nc_file.variables[var_name][layer_number-1,:].data
                     nc_file.close()
-                    #var_data = var_data[0:self.HR_cropped_dim[0],0:self.HR_cropped_dim[1]]
-                    if  self.res_normalization == 1:
-                        var_data = self.normalize(var_name, cat_number, var_data,'res')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    y[i,:,:,v] = var_data
-                elif var_name == 'iceumask':
-                    nc_file = Dataset(os.path.join(self.path_data_res,f"iced.{date_ID}_00_0000.nc"), 'r')
-                    var_data =  nc_file.variables[var_name][:].data
-                    nc_file.close()
-                    var_data = np.where((var_data < 0.1) & (var_data >-0.1), 0, var_data)
-                    var_data = np.where(var_data > 0.1, 1, var_data)
-                    var_data = np.where(var_data < -0.1, -1, var_data)
-                    var_data = np.vstack((var_data, zeropadHR))
-                    X[i,:,:,v] = var_data
-                elif var_name in self.BGC_variables:
-                    file_ID = os.path.join(self.path_data_res,f"restart.{date_ID}_00_0000.a")
-                    ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
-                    var_data = ab_file.read_field('ECO_'+var_name,layer_number,1).data
-                    ab_file.close()
-                    #if self.res_normalization == 1:
-                    #    var_data = self.normalize(var_name, layer_number, var_data,'res')
-                    var_data[mask_indices_tp5] = 0 # Put the mask at 0
-                    var_data = np.vstack((var_data, zeropadHR))
-                    y[i,:,:,v] = var_data
-                elif var_name == 'BGC':
-                    file_ID = os.path.join(self.path_data_res,f"restart.{date_ID}_00_0000.a")
-                    ab_file = abfile.ABFileRestart(file_ID,"r",idm=self.HR_dim[1],jdm=self.HR_dim[0])
-                    var_data1 = ab_file.read_field('ECO_flac',layer_number,1).data
-                    var_data2 = ab_file.read_field('ECO_diac',layer_number,1).data
-                    var_data3 = ab_file.read_field('ECO_cclc',layer_number,1).data
-                    var_data = var_data1 + var_data2 + var_data3
-                    ab_file.close()
-                    #if self.res_normalization == 1:
-                    #    var_data = self.normalize(var_name, layer_number, var_data,'res')
+                    #if  self.res_normalization == 1:
+                    #    var_data = self.normalize(var_name, cat_number, var_data,'res')
                     var_data[mask_indices_tp5] = 0 # Put the mask at 0
                     var_data = np.vstack((var_data, zeropadHR))
                     y[i,:,:,v] = var_data
                 else:
-                    raise Exception(f"Invalid target variable: {var_name}")
-                    
+                    raise Exception(f"Invalid target variable: {var_name}")    
             #
         return(X, y)
 
@@ -411,10 +305,7 @@ def forcings_date(date_str):
 
 
 import h5py
-def load_standardization_data(file_standardization):
-    if file_standardization is None:
-        return None
-        
+def load_standardization_data(file_standardization):    
     # Initialize an empty dictionary to store the loaded data
     loaded_statistics_dict = {}
     

@@ -136,10 +136,15 @@ class Att_Res_UNet():
             constrained_output = tf.keras.layers.Multiply()([positive_output, scale_factor])
         
             unet_model = tf.keras.Model(inputs, constrained_output, name = "Res-att-U-Net")
+        elif 'ECO' in self.list_predictors[0] or 'dp' in self.list_predictors[0]:
+            inputs_channels = tf.keras.layers.Lambda(lambda x: x[:, :, :, 0:self.n_targets])(inputs)
+            #inputs_channels = inputs[:, :, :, 0:self.n_targets]
+            hr_output = tf.keras.layers.Add(name="HR_output")([inputs_channels, residuals])
+            hr_output = tf.keras.layers.Activation(tf.nn.softplus)(hr_output) # Make all the values positive for ECO variables
+            unet_model = tf.keras.Model(inputs, hr_output, name = "Res-att-U-Net")
         else:
-            #hr_output = tf.keras.layers.Add(name="HR_output")([inputs, residuals])
-            #unet_model = tf.keras.Model(inputs, hr_output, name = "Res-att-U-Net")
-            inputs_channels = inputs[:, :, :, 0:self.n_targets]
+            inputs_channels = tf.keras.layers.Lambda(lambda x: x[:, :, :, 0:self.n_targets])(inputs)
+            #inputs_channels = inputs[:, :, :, 0:self.n_targets]
             hr_output = tf.keras.layers.Add(name="HR_output")([inputs_channels, residuals])
             unet_model = tf.keras.Model(inputs, hr_output, name = "Res-att-U-Net")
         #
