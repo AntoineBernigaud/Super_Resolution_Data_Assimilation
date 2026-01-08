@@ -1,13 +1,8 @@
-# This is a demo repository for the Super Resolution Data Assimilation 
-
 [![DOI](https://zenodo.org/badge/879770236.svg)](https://doi.org/10.5281/zenodo.14002682)
 
 # Super Resolution Data Assimilation 
 
-Super Resolution for the EDITO project.
-A Neural Network allows to go from a low resolution field to a high resolution field to do data assimilation in the HR space, to then go back
-in the LR dimension to run a LR model.
-To do so, the Neural Network computes the residuals it needs to add to a bilinear upsampling of the LR field to get the true HR field.
+This repo contains the Super Resolution Data Assimilation algorithm for the EDITO project. It contains a notebook illustrating the super-resolution for a specific date and giving some metrics to compare against the truth and a baseline (bilinear upsampling).
 
 # Usage
 
